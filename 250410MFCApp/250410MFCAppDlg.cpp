@@ -143,13 +143,22 @@ BOOL C250410MFCAppDlg::OnInitDialog()
 
     m_clientSocket.SetParent(this);
     m_clientSocket.SetSocketID(SOCKET_CLIENT);
+
     // UI 변경 - PLC 연결 그룹을 서버 모드로 변경
     m_btnConnectPLC.SetWindowText(_T("서버 시작"));
+
     // 기본 IP 및 포트 설정
     m_ipIndicator.SetAddress(127, 0, 0, 1);
     m_ipPLC.SetAddress(127, 0, 0, 1);
     m_portIndicator.SetWindowText(_T("5020"));  // Modbus-TCP 기본 포트
-    m_portPLC.SetWindowText(_T("5030"));
+
+    // 사용 가능한 포트 찾기
+    int nBasePort = 5030;  // 기본 시작 포트
+    int nFoundPort = FindAvailablePort(nBasePort, nBasePort + 100);  // 포트 범위 지정
+
+    CString strPort;
+    strPort.Format(_T("%d"), nFoundPort);
+    m_portPLC.SetWindowText(strPort);
 
     // 상태 표시 초기화
     m_statusIndicator.SetWindowText(_T("연결 안됨"));
@@ -158,6 +167,10 @@ BOOL C250410MFCAppDlg::OnInitDialog()
     // 로그 초기화
     AddLog(_T("ModBus-TCP 릴레이 프로그램 시작"));
     AddLog(_T("인디케이터와 PLC 사이의 통신을 중계합니다."));
+
+    CString strPortInfo;
+    strPortInfo.Format(_T("서버 포트 %d 자동 할당됨"), nFoundPort);
+    AddLog(strPortInfo);
 
     return TRUE;
 }
@@ -591,4 +604,28 @@ CString C250410MFCAppDlg::AnalyzeModbusPacket(const BYTE* pData, int nLength)
     }
 
     return strResult;
+}
+int C250410MFCAppDlg::FindAvailablePort(int nStartPort, int nEndPort)
+{
+    for (int port = nStartPort; port <= nEndPort; port++)
+    {
+        CAsyncSocket testSocket;
+        if (testSocket.Create(port))
+        {
+            testSocket.Close();
+            return port;  // 포트 사용 가능
+        }
+        else
+        {
+            int nError = GetLastError();
+            if (nError != WSAEADDRINUSE)
+            {
+                // 주소가 이미 사용 중인 경우가 아닌 다른 오류라면
+                // 기본 포트로 돌아감
+                return nStartPort;
+            }
+        }
+    }
+    // 모든 포트가 사용 중이면 기본 포트 반환
+    return nStartPort;
 }

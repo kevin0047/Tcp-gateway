@@ -32,6 +32,7 @@ public:
     // 데이터 송신 함수
     BOOL SendData(const BYTE* pData, int nLength);
     std::vector<BYTE> m_RecvBuffer;  // 수신 버퍼
+
 private:
     CDialog* m_pParent;  // 부모 대화상자
     int m_nSocketID;     // 소켓 식별자
@@ -108,4 +109,6 @@ public:
 
     // Modbus 패킷 분석 함수
     CString AnalyzeModbusPacket(const BYTE* pData, int nLength);
+    //포트 번호 찾기 함수
+    int FindAvailablePort(int nStartPort, int nEndPort);
 };
