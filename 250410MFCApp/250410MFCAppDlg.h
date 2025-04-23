@@ -7,11 +7,6 @@
 class CModbusTcpSocket : public CAsyncSocket
 {
 public:
-
-
-    // Accept 이벤트 처리 추가
-    virtual void OnAccept(int nErrorCode);
-
     CModbusTcpSocket();
     virtual ~CModbusTcpSocket();
 
@@ -24,6 +19,7 @@ public:
     bool IsListenMode() const { return m_bListenMode; }
 
     // 오버라이드된 비동기 소켓 함수
+    virtual void OnAccept(int nErrorCode);
     virtual void OnConnect(int nErrorCode);
     virtual void OnReceive(int nErrorCode);
     virtual void OnClose(int nErrorCode);
@@ -36,8 +32,20 @@ public:
 private:
     CDialog* m_pParent;  // 부모 대화상자
     int m_nSocketID;     // 소켓 식별자
-
     bool m_bListenMode;  // 리슨 모드 여부
+};
+
+// 인디케이터-PLC 연결 쌍 정보를 저장하는 구조체
+struct ConnectionPair {
+    CString indicatorIP;
+    int indicatorPort;
+    int unitID;
+    int plcPort;  // 자동 할당된 PLC 서버 포트
+    CModbusTcpSocket indicatorSocket;  // 인디케이터와 통신하는 클라이언트 소켓
+    CModbusTcpSocket serverSocket;     // 서버 모드로 대기하는 리스닝 소켓
+    CModbusTcpSocket clientSocket;     // Accept 후 실제 통신에 사용하는 소켓
+    bool indicatorConnected;
+    bool plcConnected;
 };
 
 // 250410MFCAppDlg 대화 상자
@@ -58,7 +66,7 @@ protected:
     virtual BOOL OnInitDialog();
     afx_msg void OnPaint();
     afx_msg HCURSOR OnQueryDragIcon();
- 
+
     HICON m_hIcon;
     DECLARE_MESSAGE_MAP()
 
@@ -77,31 +85,34 @@ public:
     afx_msg LRESULT OnSocketAccept(WPARAM wParam, LPARAM lParam);
 
     // 컨트롤 변수
-    CIPAddressCtrl m_ipIndicator;
-    CIPAddressCtrl m_ipPLC;
-    CEdit m_portIndicator;
-    CEdit m_portPLC;
+    CListBox m_connectionList;  // 연결 목록 표시용
     CListBox m_logList;
-    CButton m_btnConnectIndicator;
-    CButton m_btnConnectPLC;
+    CButton m_btnConnectAll;    // 모든 연결 시작/중단 버튼
     CButton m_btnClearLog;
-    CStatic m_statusIndicator;
-    CStatic m_statusPLC;
 
     // 컨트롤 핸들러
-    afx_msg void OnBnClickedBtnConnectIndicator();
-    afx_msg void OnBnClickedBtnConnectPlc();
+    afx_msg void OnBnClickedBtnConnectAll();
     afx_msg void OnBnClickedBtnClearLog();
 
-    // 통신 관련 변수 및 함수
-    CModbusTcpSocket m_indicatorSocket;  // 인디케이터와 통신하는 클라이언트 소켓
-    CModbusTcpSocket m_serverSocket;     // 서버 모드로 대기하는 리스닝 소켓
-    CModbusTcpSocket m_clientSocket;     // Accept 후 실제 통신에 사용하는 소켓
-    bool m_bIndicatorConnected;
-    bool m_bPlcConnected;                // 서버 모드 동작 여부로 의미 변경
-    // 중계 함수
-    void IndicatorToPLC(const BYTE* pData, int nLength);
-    void PLCToIndicator(const BYTE* pData, int nLength);
+    // 변경 후
+    static const int MAX_CONNECTIONS = 10;  // 최대 연결 개수
+    ConnectionPair m_connections[MAX_CONNECTIONS];
+    int m_connectionCount;  // 실제 사용 중인 연결 개수
+
+    // 연결 관리 기능
+    BOOL LoadConnectionsFromFile(LPCTSTR lpszFilePath);
+    void InitializeConnections();
+    int FindConnectionBySocketID(int nSocketID);
+    void ConnectIndicator(int index);
+    void StartPLCServer(int index);
+
+    // UI 변경 관련
+    void UpdateConnectionList();
+    void UpdateStatusDisplay();
+
+    // 통신 관련 함수
+    void IndicatorToPLC(int index, const BYTE* pData, int nLength);
+    void PLCToIndicator(int index, const BYTE* pData, int nLength);
 
     // 로그 함수
     void AddLog(LPCTSTR pszPrefix, const BYTE* pData, int nLength);
@@ -109,6 +120,6 @@ public:
 
     // Modbus 패킷 분석 함수
     CString AnalyzeModbusPacket(const BYTE* pData, int nLength);
-    //포트 번호 찾기 함수
+    // 포트 번호 찾기 함수
     int FindAvailablePort(int nStartPort, int nEndPort);
 };

@@ -12,7 +12,8 @@
 #define WM_SOCKET_CONNECT (WM_USER + 1)
 #define WM_SOCKET_RECEIVE (WM_USER + 2)
 #define WM_SOCKET_CLOSE   (WM_USER + 3)
-#define WM_SOCKET_ACCEPT   (WM_USER + 4)
+#define WM_SOCKET_ACCEPT  (WM_USER + 4)
+
 // CModbusTcpSocket 클래스 구현
 CModbusTcpSocket::CModbusTcpSocket()
     : m_pParent(NULL), m_nSocketID(0), m_bConnected(false), m_bListenMode(false)
@@ -33,6 +34,7 @@ void CModbusTcpSocket::OnAccept(int nErrorCode)
     }
     CAsyncSocket::OnAccept(nErrorCode);
 }
+
 void CModbusTcpSocket::OnConnect(int nErrorCode)
 {
     m_bConnected = (nErrorCode == 0);
@@ -80,11 +82,8 @@ BOOL CModbusTcpSocket::SendData(const BYTE* pData, int nLength)
 }
 
 // C250410MFCAppDlg 대화 상자
-
 C250410MFCAppDlg::C250410MFCAppDlg(CWnd* pParent /*=nullptr*/)
     : CDialogEx(IDD_MY250410MFCAPP_DIALOG, pParent)
-    , m_bIndicatorConnected(false)
-    , m_bPlcConnected(false)
 {
     m_hIcon = AfxGetApp()->LoadIcon(IDR_MAINFRAME);
 }
@@ -96,23 +95,16 @@ C250410MFCAppDlg::~C250410MFCAppDlg()
 void C250410MFCAppDlg::DoDataExchange(CDataExchange* pDX)
 {
     CDialogEx::DoDataExchange(pDX);
-    DDX_Control(pDX, IDC_IPADDRESS_INDICATOR, m_ipIndicator);
-    DDX_Control(pDX, IDC_IPADDRESS_PLC, m_ipPLC);
-    DDX_Control(pDX, IDC_EDIT_PORT_INDICATOR, m_portIndicator);
-    DDX_Control(pDX, IDC_EDIT_PORT_PLC, m_portPLC);
+    DDX_Control(pDX, IDC_LIST_CONNECTION, m_connectionList);
     DDX_Control(pDX, IDC_LIST_LOG, m_logList);
-    DDX_Control(pDX, IDC_BTN_CONNECT_INDICATOR, m_btnConnectIndicator);
-    DDX_Control(pDX, IDC_BTN_CONNECT_PLC, m_btnConnectPLC);
+    DDX_Control(pDX, IDC_BTN_CONNECT_ALL, m_btnConnectAll);
     DDX_Control(pDX, IDC_BTN_CLEAR_LOG, m_btnClearLog);
-    DDX_Control(pDX, IDC_STATIC_STATUS_INDICATOR, m_statusIndicator);
-    DDX_Control(pDX, IDC_STATIC_STATUS_PLC, m_statusPLC);
 }
 
 BEGIN_MESSAGE_MAP(C250410MFCAppDlg, CDialogEx)
     ON_WM_PAINT()
     ON_WM_QUERYDRAGICON()
-    ON_BN_CLICKED(IDC_BTN_CONNECT_INDICATOR, &C250410MFCAppDlg::OnBnClickedBtnConnectIndicator)
-    ON_BN_CLICKED(IDC_BTN_CONNECT_PLC, &C250410MFCAppDlg::OnBnClickedBtnConnectPlc)
+    ON_BN_CLICKED(IDC_BTN_CONNECT_ALL, &C250410MFCAppDlg::OnBnClickedBtnConnectAll)
     ON_BN_CLICKED(IDC_BTN_CLEAR_LOG, &C250410MFCAppDlg::OnBnClickedBtnClearLog)
     ON_MESSAGE(WM_SOCKET_CONNECT, &C250410MFCAppDlg::OnSocketConnect)
     ON_MESSAGE(WM_SOCKET_RECEIVE, &C250410MFCAppDlg::OnSocketReceive)
@@ -121,56 +113,51 @@ BEGIN_MESSAGE_MAP(C250410MFCAppDlg, CDialogEx)
 END_MESSAGE_MAP()
 
 // C250410MFCAppDlg 메시지 처리기
-
 BOOL C250410MFCAppDlg::OnInitDialog()
 {
     CDialogEx::OnInitDialog();
-
     // 이 대화 상자의 아이콘을 설정합니다.
     SetIcon(m_hIcon, TRUE);
     SetIcon(m_hIcon, FALSE);
-
     // 소켓 초기화
     AfxSocketInit();
+    // 버튼 텍스트 설정
+    m_btnConnectAll.SetWindowText(_T("모든 연결 시작"));
+    m_btnClearLog.SetWindowText(_T("로그 지우기"));
 
-    // 소켓 설정
-    m_indicatorSocket.SetParent(this);
-    m_indicatorSocket.SetSocketID(SOCKET_INDICATOR);
+    // 연결 개수 초기화
+    m_connectionCount = 0;
 
-    m_serverSocket.SetParent(this);
-    m_serverSocket.SetSocketID(SOCKET_SERVER);
-    m_serverSocket.SetListenMode(true);
+    // set.csv 파일 로드
+    if (LoadConnectionsFromFile(_T("set.csv")))
+    {
+        AddLog(_T("set.csv 파일 로드 성공"));
+        InitializeConnections();
+    }
+    else
+    {
+        AddLog(_T("set.csv 파일 로드 실패, 기본 연결 생성"));
 
-    m_clientSocket.SetParent(this);
-    m_clientSocket.SetSocketID(SOCKET_CLIENT);
+        // 기본 연결 생성 (배열 첫 번째 요소에 저장)
+        m_connections[0].indicatorIP = _T("127.0.0.1");
+        m_connections[0].indicatorPort = 5020;
+        m_connections[0].unitID = 1;
+        m_connections[0].plcPort = 0;  // 자동 할당
+        m_connections[0].indicatorConnected = false;
+        m_connections[0].plcConnected = false;
 
-    // UI 변경 - PLC 연결 그룹을 서버 모드로 변경
-    m_btnConnectPLC.SetWindowText(_T("서버 시작"));
+        // 연결 개수 설정
+        m_connectionCount = 1;
 
-    // 기본 IP 및 포트 설정
-    m_ipIndicator.SetAddress(127, 0, 0, 1);
-    m_ipPLC.SetAddress(127, 0, 0, 1);
-    m_portIndicator.SetWindowText(_T("5020"));  // Modbus-TCP 기본 포트
-
-    // 사용 가능한 포트 찾기
-    int nBasePort = 5030;  // 기본 시작 포트
-    int nFoundPort = FindAvailablePort(nBasePort, nBasePort + 100);  // 포트 범위 지정
-
-    CString strPort;
-    strPort.Format(_T("%d"), nFoundPort);
-    m_portPLC.SetWindowText(strPort);
-
-    // 상태 표시 초기화
-    m_statusIndicator.SetWindowText(_T("연결 안됨"));
-    m_statusPLC.SetWindowText(_T("연결 안됨"));
+        InitializeConnections();
+    }
 
     // 로그 초기화
     AddLog(_T("ModBus-TCP 릴레이 프로그램 시작"));
-    AddLog(_T("인디케이터와 PLC 사이의 통신을 중계합니다."));
+    AddLog(_T("여러 인디케이터와 PLC 간의 통신을 중계합니다."));
 
-    CString strPortInfo;
-    strPortInfo.Format(_T("서버 포트 %d 자동 할당됨"), nFoundPort);
-    AddLog(strPortInfo);
+    // 상태 표시 업데이트
+    UpdateStatusDisplay();
 
     return TRUE;
 }
@@ -203,129 +190,348 @@ HCURSOR C250410MFCAppDlg::OnQueryDragIcon()
     return static_cast<HCURSOR>(m_hIcon);
 }
 
-void C250410MFCAppDlg::OnBnClickedBtnConnectIndicator()
+BOOL C250410MFCAppDlg::LoadConnectionsFromFile(LPCTSTR lpszFilePath)
 {
-    if (!m_bIndicatorConnected)
+    CStdioFile file;
+    CFileException fileException;
+
+    m_connectionCount = 0;  // 연결 개수 초기화
+
+    if (!file.Open(lpszFilePath, CFile::modeRead | CFile::typeText, &fileException))
     {
-        // 연결 시도
-        DWORD dwAddress;
-        m_ipIndicator.GetAddress(dwAddress);
+        CString strError;
+        strError.Format(_T("CSV 파일을 열 수 없습니다: %s"), lpszFilePath);
+        AddLog(strError);
+        return FALSE;
+    }
 
-        CString strPort;
-        m_portIndicator.GetWindowText(strPort);
-        int nPort = _ttoi(strPort);
+    // 첫 줄은 헤더이므로 건너뜁니다
+    CString strLine;
+    file.ReadString(strLine);
 
-        CString strIP;
-        strIP.Format(_T("%d.%d.%d.%d"),
-            (dwAddress >> 24) & 0xFF,
-            (dwAddress >> 16) & 0xFF,
-            (dwAddress >> 8) & 0xFF,
-            dwAddress & 0xFF);
+    // 연결 쌍 정보 읽기
+    while (file.ReadString(strLine) && m_connectionCount < MAX_CONNECTIONS)
+    {
+        // CSV 파싱
+        int pos = 0;
+        CString token = strLine.Tokenize(_T(","), pos);
+        m_connections[m_connectionCount].indicatorIP = token;
 
-        // 소켓 생성 및 연결
-        if (m_indicatorSocket.Create())
+        token = strLine.Tokenize(_T(","), pos);
+        m_connections[m_connectionCount].indicatorPort = _ttoi(token);
+
+        token = strLine.Tokenize(_T(","), pos);
+        m_connections[m_connectionCount].unitID = _ttoi(token);
+
+        // PLC 서버 포트는 자동 할당 (나중에 초기화)
+        m_connections[m_connectionCount].plcPort = 0;
+
+        // 소켓 및 연결 상태 초기화
+        m_connections[m_connectionCount].indicatorConnected = false;
+        m_connections[m_connectionCount].plcConnected = false;
+
+        // 연결 개수 증가
+        m_connectionCount++;
+    }
+
+    file.Close();
+    return (m_connectionCount > 0);
+}
+
+void C250410MFCAppDlg::InitializeConnections()
+{
+    // 기본 포트 시작 번호
+    int nBasePort = 5030;
+
+    // 각 연결 쌍에 대해 소켓 초기화 및 포트 할당
+    for (int i = 0; i < m_connectionCount; i++)
+    {
+        ConnectionPair& pair = m_connections[i];
+
+        // 인디케이터 소켓 설정
+        pair.indicatorSocket.SetParent(this);
+        pair.indicatorSocket.SetSocketID(SOCKET_INDICATOR + (i * 10));  // 고유 ID 부여
+
+        // 서버 소켓 설정
+        pair.serverSocket.SetParent(this);
+        pair.serverSocket.SetSocketID(SOCKET_SERVER + (i * 10));  // 고유 ID 부여
+        pair.serverSocket.SetListenMode(true);
+
+        // 클라이언트 소켓 설정
+        pair.clientSocket.SetParent(this);
+        pair.clientSocket.SetSocketID(SOCKET_CLIENT + (i * 10));  // 고유 ID 부여
+
+        // PLC 서버 포트 할당
+        int nFoundPort = FindAvailablePort(nBasePort, nBasePort + 100);
+        pair.plcPort = nFoundPort;
+        nBasePort = nFoundPort + 1;  // 다음 포트 검색 시작점
+
+        CString strLog;
+        strLog.Format(_T("인디케이터 %s:%d(Unit ID: %d) - PLC 서버 포트: %d 할당됨"),
+            pair.indicatorIP, pair.indicatorPort, pair.unitID, pair.plcPort);
+        AddLog(strLog);
+    }
+
+    // UI 업데이트
+    UpdateConnectionList();
+}
+
+void C250410MFCAppDlg::OnBnClickedBtnConnectAll()
+{
+    // 모든 연결 시작 또는 중지
+    bool allConnected = true;
+    for (int i = 0; i < m_connectionCount; i++)
+    {
+        if (!m_connections[i].indicatorConnected || !m_connections[i].plcConnected)
         {
-            if (m_indicatorSocket.Connect(strIP, nPort))
+            allConnected = false;
+            break;
+        }
+    }
+    if (!allConnected)
+    {
+        // 모든 연결 시작
+        AddLog(_T("모든 연결 시작..."));
+        for (int i = 0; i < m_connectionCount; i++)
+        {
+            ConnectionPair& pair = m_connections[i];
+            // 인디케이터 연결
+            if (!pair.indicatorConnected)
             {
-                AddLog(_T("인디케이터 연결 중..."));
+                ConnectIndicator(i);
             }
-            else
+            // PLC 서버 시작
+            if (!pair.plcConnected)
             {
-                int nError = GetLastError();
-                if (nError != WSAEWOULDBLOCK)
-                {
-                    CString strError;
-                    strError.Format(_T("인디케이터 연결 실패: 오류 코드 %d"), nError);
-                    AddLog(strError);
-                    m_indicatorSocket.Close();
-                }
+                StartPLCServer(i);
             }
         }
-        else
-        {
-            AddLog(_T("인디케이터 소켓 생성 실패"));
-        }
+        m_btnConnectAll.SetWindowText(_T("모든 연결 중지"));
     }
     else
     {
-        // 연결 해제
-        m_indicatorSocket.Close();
-        m_bIndicatorConnected = false;
-        m_btnConnectIndicator.SetWindowText(_T("연결"));
-        m_statusIndicator.SetWindowText(_T("연결 안됨"));
-        AddLog(_T("인디케이터 연결 해제"));
-    }
-}
-
-void C250410MFCAppDlg::OnBnClickedBtnConnectPlc()
-{
-    if (!m_bPlcConnected)
-    {
-        // 연결 시도 (서버 모드)
-        DWORD dwAddress;
-        m_ipPLC.GetAddress(dwAddress);
-
-        CString strPort;
-        m_portPLC.GetWindowText(strPort);
-        int nPort = _ttoi(strPort);
-
-        // 서버 소켓 생성 및 바인딩
-        if (m_serverSocket.Create(nPort))
+        // 모든 연결 중지
+        AddLog(_T("모든 연결 중지..."));
+        for (int i = 0; i < m_connectionCount; i++)
         {
-            if (m_serverSocket.Listen())
+            ConnectionPair& pair = m_connections[i];
+            // 인디케이터 연결 해제
+            if (pair.indicatorConnected)
             {
-                m_bPlcConnected = true;
-                m_btnConnectPLC.SetWindowText(_T("중지"));
-                m_statusPLC.SetWindowText(_T("대기 중..."));
-
-                CString strLog;
-                strLog.Format(_T("PLC 서버 모드 시작: 포트 %d 대기 중"), nPort);
-                AddLog(strLog);
+                pair.indicatorSocket.Close();
+                pair.indicatorConnected = false;
             }
-            else
+            // PLC 서버 중지
+            if (pair.plcConnected)
             {
-                int nError = GetLastError();
+                pair.serverSocket.Close();
+                pair.clientSocket.Close();
+                pair.plcConnected = false;
+            }
+        }
+        m_btnConnectAll.SetWindowText(_T("모든 연결 시작"));
+    }
+    UpdateConnectionList();
+    UpdateStatusDisplay();
+}
+void C250410MFCAppDlg::ConnectIndicator(int index)
+{
+    ConnectionPair& pair = m_connections[index];
+
+    // 인디케이터 연결
+    if (pair.indicatorSocket.Create())
+    {
+        if (pair.indicatorSocket.Connect(pair.indicatorIP, pair.indicatorPort))
+        {
+            CString strLog;
+            strLog.Format(_T("인디케이터 %s:%d 연결 중..."), pair.indicatorIP, pair.indicatorPort);
+            AddLog(strLog);
+        }
+        else
+        {
+            int nError = GetLastError();
+            if (nError != WSAEWOULDBLOCK)
+            {
                 CString strError;
-                strError.Format(_T("서버 리슨 실패: 오류 코드 %d"), nError);
+                strError.Format(_T("인디케이터 %s:%d 연결 실패: 오류 코드 %d"),
+                    pair.indicatorIP, pair.indicatorPort, nError);
                 AddLog(strError);
-                m_serverSocket.Close();
+                pair.indicatorSocket.Close();
             }
-        }
-        else
-        {
-            AddLog(_T("서버 소켓 생성 실패"));
         }
     }
     else
     {
-        // 서버 중지
-        m_serverSocket.Close();
-        m_clientSocket.Close();
-        m_bPlcConnected = false;
-        m_btnConnectPLC.SetWindowText(_T("서버 시작"));
-        m_statusPLC.SetWindowText(_T("중지됨"));
-        AddLog(_T("PLC 서버 모드 중지"));
+        CString strError;
+        strError.Format(_T("인디케이터 %s:%d 소켓 생성 실패"), pair.indicatorIP, pair.indicatorPort);
+        AddLog(strError);
     }
 }
-// 클라이언트 접속 처리 함수 추가
+
+void C250410MFCAppDlg::StartPLCServer(int index)
+{
+    ConnectionPair& pair = m_connections[index];
+
+    // PLC 서버 시작
+    if (pair.serverSocket.Create(pair.plcPort))
+    {
+        if (pair.serverSocket.Listen())
+        {
+            pair.plcConnected = true;
+
+            CString strLog;
+            strLog.Format(_T("PLC 서버 모드 시작: 포트 %d 대기 중 (인디케이터 %s:%d 용)"),
+                pair.plcPort, pair.indicatorIP, pair.indicatorPort);
+            AddLog(strLog);
+        }
+        else
+        {
+            int nError = GetLastError();
+            CString strError;
+            strError.Format(_T("PLC 서버 시작 실패: 포트 %d, 오류 코드 %d"), pair.plcPort, nError);
+            AddLog(strError);
+            pair.serverSocket.Close();
+        }
+    }
+    else
+    {
+        CString strError;
+        strError.Format(_T("PLC 서버 소켓 생성 실패: 포트 %d"), pair.plcPort);
+        AddLog(strError);
+    }
+}
+
+void C250410MFCAppDlg::OnBnClickedBtnClearLog()
+{
+    m_logList.ResetContent();
+    AddLog(_T("로그 지움"));
+}
+
+int C250410MFCAppDlg::FindConnectionBySocketID(int nSocketID)
+{
+    // 해당 소켓 ID가 어떤 연결 쌍에 속하는지 찾기
+    int baseID = nSocketID / 10 * 10;  // 소켓 ID에서 기본 ID 추출
+    int index = baseID / 10;
+
+    if (index >= 0 && index < (int)m_connectionCount)
+    {
+        return index;
+    }
+
+    return -1;  // 찾지 못함
+}
+
+void C250410MFCAppDlg::UpdateConnectionList()
+{
+    // 연결 목록 업데이트
+    m_connectionList.ResetContent();
+
+    for (size_t i = 0; i < m_connectionCount; i++)
+    {
+        ConnectionPair& pair = m_connections[i];
+
+        CString strStatus;
+        CString strIndicatorStatus = pair.indicatorConnected ? _T("연결됨") : _T("연결 안됨");
+        CString strPLCStatus = pair.plcConnected ? (pair.clientSocket.IsConnected() ? _T("연결됨") : _T("대기 중")) : _T("중지됨");
+
+        strStatus.Format(_T("%d. %s:%d(Unit:%d) [%s] <-> PLC 포트:%d [%s]"),
+            i + 1, pair.indicatorIP, pair.indicatorPort, pair.unitID,
+            strIndicatorStatus, pair.plcPort, strPLCStatus);
+
+        m_connectionList.AddString(strStatus);
+    }
+}
+
+void C250410MFCAppDlg::UpdateStatusDisplay()
+{
+    // 상태 표시 업데이트
+    CString strStatus;
+    int nConnectedInd = 0, nConnectedPLC = 0;
+
+    for (size_t i = 0; i < m_connectionCount; i++)
+    {
+        if (m_connections[i].indicatorConnected) nConnectedInd++;
+        if (m_connections[i].plcConnected) nConnectedPLC++;
+    }
+
+    strStatus.Format(_T("ModBus-TCP 릴레이 프로그램 - 연결 현황: 인디케이터 %d/%d, PLC %d/%d"),
+        nConnectedInd, m_connectionCount, nConnectedPLC, m_connectionCount);
+
+    SetWindowText(strStatus);
+}
+
+LRESULT C250410MFCAppDlg::OnSocketConnect(WPARAM wParam, LPARAM lParam)
+{
+    int nSocketID = (int)wParam;
+    int nErrorCode = (int)lParam;
+
+    // 어떤 연결 쌍에 속하는지 찾기
+    int index = FindConnectionBySocketID(nSocketID);
+    if (index < 0) return 0;
+
+    ConnectionPair& pair = m_connections[index];
+
+    // 소켓 타입 확인
+    int baseID = nSocketID / 10 * 10;
+    int socketType = nSocketID - baseID;
+
+    if (socketType == SOCKET_INDICATOR)
+    {
+        if (nErrorCode == 0)
+        {
+            pair.indicatorConnected = true;
+            CString strLog;
+            strLog.Format(_T("인디케이터 %s:%d 연결 성공"), pair.indicatorIP, pair.indicatorPort);
+            AddLog(strLog);
+        }
+        else
+        {
+            CString strError;
+            strError.Format(_T("인디케이터 %s:%d 연결 실패: 오류 코드 %d"),
+                pair.indicatorIP, pair.indicatorPort, nErrorCode);
+            AddLog(strError);
+            pair.indicatorSocket.Close();
+        }
+    }
+    else if (socketType == SOCKET_CLIENT)
+    {
+        // 클라이언트 소켓 연결은 OnSocketAccept에서 처리
+    }
+
+    UpdateConnectionList();
+    UpdateStatusDisplay();
+
+    return 0;
+}
+
 LRESULT C250410MFCAppDlg::OnSocketAccept(WPARAM wParam, LPARAM lParam)
 {
     int nSocketID = (int)wParam;
 
-    if (nSocketID == SOCKET_SERVER)
+    // 어떤 연결 쌍에 속하는지 찾기
+    int index = FindConnectionBySocketID(nSocketID);
+    if (index < 0) return 0;
+
+    ConnectionPair& pair = m_connections[index];
+
+    // 소켓 타입 확인
+    int baseID = nSocketID / 10 * 10;
+    int socketType = nSocketID - baseID;
+
+    if (socketType == SOCKET_SERVER)
     {
         // 새로운 클라이언트 연결 수락
-        if (m_clientSocket.m_hSocket != INVALID_SOCKET)
+        if (pair.clientSocket.m_hSocket != INVALID_SOCKET)
         {
             // 기존 연결이 있으면 닫기
-            m_clientSocket.Close();
+            pair.clientSocket.Close();
         }
 
         // 연결 수락
         SOCKADDR_IN clientAddr;
         int addrLen = sizeof(clientAddr);
 
-        if (m_serverSocket.Accept(m_clientSocket, (SOCKADDR*)&clientAddr, &addrLen))
+        if (pair.serverSocket.Accept(pair.clientSocket, (SOCKADDR*)&clientAddr, &addrLen))
         {
             // 클라이언트 정보 추출
             CString strClientIP;
@@ -338,67 +544,24 @@ LRESULT C250410MFCAppDlg::OnSocketAccept(WPARAM wParam, LPARAM lParam)
             int nClientPort = ntohs(clientAddr.sin_port);
 
             CString strInfo;
-            strInfo.Format(_T("클라이언트 접속: %s:%d"), strClientIP, nClientPort);
+            strInfo.Format(_T("포트 %d에 클라이언트 접속: %s:%d (인디케이터 %s:%d 용)"),
+                pair.plcPort, strClientIP, nClientPort, pair.indicatorIP, pair.indicatorPort);
             AddLog(strInfo);
 
             // 클라이언트 소켓 설정
-            m_clientSocket.SetSocketID(SOCKET_CLIENT);
-            m_clientSocket.m_bConnected = true;
-            m_statusPLC.SetWindowText(_T("클라이언트 연결됨"));
-        }
-        else
-        {
-            AddLog(_T("클라이언트 연결 수락 실패"));
-        }
-    }
-
-    return 0;
-}
-void C250410MFCAppDlg::OnBnClickedBtnClearLog()
-{
-    m_logList.ResetContent();
-    AddLog(_T("로그 지움"));
-}
-
-LRESULT C250410MFCAppDlg::OnSocketConnect(WPARAM wParam, LPARAM lParam)
-{
-    int nSocketID = (int)wParam;
-    int nErrorCode = (int)lParam;
-
-    if (nSocketID == SOCKET_INDICATOR)
-    {
-        if (nErrorCode == 0)
-        {
-            m_bIndicatorConnected = true;
-            m_btnConnectIndicator.SetWindowText(_T("해제"));
-            m_statusIndicator.SetWindowText(_T("연결됨"));
-            AddLog(_T("인디케이터 연결 성공"));
+            pair.clientSocket.SetSocketID(SOCKET_CLIENT + (index * 10));
+            pair.clientSocket.m_bConnected = true;
         }
         else
         {
             CString strError;
-            strError.Format(_T("인디케이터 연결 실패: 오류 코드 %d"), nErrorCode);
+            strError.Format(_T("포트 %d 클라이언트 연결 수락 실패"), pair.plcPort);
             AddLog(strError);
-            m_indicatorSocket.Close();
         }
     }
-    else if (nSocketID == SOCKET_CLIENT)
-    {
-        if (nErrorCode == 0)
-        {
-            m_bPlcConnected = true;
-            m_btnConnectPLC.SetWindowText(_T("해제"));
-            m_statusPLC.SetWindowText(_T("연결됨"));
-            AddLog(_T("PLC 연결 성공"));
-        }
-        else
-        {
-            CString strError;
-            strError.Format(_T("PLC 연결 실패: 오류 코드 %d"), nErrorCode);
-            AddLog(strError);
-            m_clientSocket.Close();
-        }
-    }
+
+    UpdateConnectionList();
+    UpdateStatusDisplay();
 
     return 0;
 }
@@ -408,37 +571,56 @@ LRESULT C250410MFCAppDlg::OnSocketReceive(WPARAM wParam, LPARAM lParam)
     int nSocketID = (int)wParam;
     int nBytesAvailable = (int)lParam;
 
-    if (nSocketID == SOCKET_INDICATOR)
+    // 어떤 연결 쌍에 속하는지 찾기
+    int index = FindConnectionBySocketID(nSocketID);
+    if (index < 0) return 0;
+
+    ConnectionPair& pair = m_connections[index];
+
+    // 소켓 타입 확인
+    int baseID = nSocketID / 10 * 10;
+    int socketType = nSocketID - baseID;
+
+    if (socketType == SOCKET_INDICATOR)
     {
         // 인디케이터에서 데이터 수신
-        std::vector<BYTE>& buffer = m_indicatorSocket.m_RecvBuffer;
+        std::vector<BYTE>& buffer = pair.indicatorSocket.m_RecvBuffer;
         if (!buffer.empty())
         {
             // Modbus-TCP 패킷 분석 및 로그
             CString strAnalysis = AnalyzeModbusPacket(buffer.data(), (int)buffer.size());
             if (!strAnalysis.IsEmpty())
-                AddLog(strAnalysis);
+            {
+                CString strFullLog;
+                strFullLog.Format(_T("[인디케이터 %s:%d] %s"),
+                    pair.indicatorIP, pair.indicatorPort, strAnalysis);
+                AddLog(strFullLog);
+            }
 
             // PLC로 데이터 전달
-            IndicatorToPLC(buffer.data(), (int)buffer.size());
+            IndicatorToPLC(index, buffer.data(), (int)buffer.size());
 
             // 버퍼 비우기
             buffer.clear();
         }
     }
-    else if (nSocketID == SOCKET_CLIENT)  // SOCKET_PLC 대신 SOCKET_CLIENT 사용
+    else if (socketType == SOCKET_CLIENT)
     {
         // 클라이언트(PLC)에서 데이터 수신
-        std::vector<BYTE>& buffer = m_clientSocket.m_RecvBuffer;  // m_plcSocket 대신 m_clientSocket 사용
+        std::vector<BYTE>& buffer = pair.clientSocket.m_RecvBuffer;
         if (!buffer.empty())
         {
             // Modbus-TCP 패킷 분석 및 로그
             CString strAnalysis = AnalyzeModbusPacket(buffer.data(), (int)buffer.size());
             if (!strAnalysis.IsEmpty())
-                AddLog(strAnalysis);
+            {
+                CString strFullLog;
+                strFullLog.Format(_T("[PLC 포트 %d] %s"), pair.plcPort, strAnalysis);
+                AddLog(strFullLog);
+            }
 
             // 인디케이터로 데이터 전달
-            PLCToIndicator(buffer.data(), (int)buffer.size());
+            PLCToIndicator(index, buffer.data(), (int)buffer.size());
 
             // 버퍼 비우기
             buffer.clear();
@@ -452,58 +634,94 @@ LRESULT C250410MFCAppDlg::OnSocketClose(WPARAM wParam, LPARAM lParam)
 {
     int nSocketID = (int)wParam;
 
-    if (nSocketID == SOCKET_INDICATOR)
+    // 어떤 연결 쌍에 속하는지 찾기
+    int index = FindConnectionBySocketID(nSocketID);
+    if (index < 0) return 0;
+
+    ConnectionPair& pair = m_connections[index];
+
+    // 소켓 타입 확인
+    int baseID = nSocketID / 10 * 10;
+    int socketType = nSocketID - baseID;
+
+    if (socketType == SOCKET_INDICATOR)
     {
-        m_bIndicatorConnected = false;
-        m_btnConnectIndicator.SetWindowText(_T("연결"));
-        m_statusIndicator.SetWindowText(_T("연결 안됨"));
-        AddLog(_T("인디케이터 연결 종료됨"));
+        pair.indicatorConnected = false;
+        CString strLog;
+        strLog.Format(_T("인디케이터 %s:%d 연결 종료됨"), pair.indicatorIP, pair.indicatorPort);
+        AddLog(strLog);
     }
-    else if (nSocketID == SOCKET_CLIENT)
+    else if (socketType == SOCKET_CLIENT)
     {
-        m_bPlcConnected = false;
-        m_btnConnectPLC.SetWindowText(_T("연결"));
-        m_statusPLC.SetWindowText(_T("연결 안됨"));
-        AddLog(_T("PLC 연결 종료됨"));
+        CString strLog;
+        strLog.Format(_T("PLC 포트 %d 클라이언트 연결 종료됨"), pair.plcPort);
+        AddLog(strLog);
     }
+
+    UpdateConnectionList();
+    UpdateStatusDisplay();
 
     return 0;
 }
 
-void C250410MFCAppDlg::IndicatorToPLC(const BYTE* pData, int nLength)
+void C250410MFCAppDlg::IndicatorToPLC(int index, const BYTE* pData, int nLength)
 {
-    if (m_clientSocket.m_hSocket != INVALID_SOCKET && m_clientSocket.IsConnected())
-    {
-        AddLog(_T("인디케이터 → PLC: "), pData, nLength);
-        BOOL bResult = m_clientSocket.SendData(pData, nLength);
+    ConnectionPair& pair = m_connections[index];
 
-        if (bResult)
+    if (pair.clientSocket.m_hSocket != INVALID_SOCKET && pair.clientSocket.IsConnected())
+    {
+        CString strLog;
+        strLog.Format(_T("인디케이터 %s:%d → PLC 포트 %d: "),
+            pair.indicatorIP, pair.indicatorPort, pair.plcPort);
+        AddLog(strLog, pData, nLength);
+
+        BOOL bResult = pair.clientSocket.SendData(pData, nLength);
+
+        if (!bResult)
         {
-            AddLog(_T("인디케이터 → PLC: 데이터 전송 성공"));
-        }
-        else
-        {
-            AddLog(_T("인디케이터 → PLC: 데이터 전송 실패"));
+            CString strError;
+            strError.Format(_T("인디케이터 %s:%d → PLC 포트 %d: 데이터 전송 실패"),
+                pair.indicatorIP, pair.indicatorPort, pair.plcPort);
+            AddLog(strError);
         }
     }
     else
     {
-        AddLog(_T("PLC 클라이언트 연결 안됨: 데이터 전송 실패"));
-    }
-}
-void C250410MFCAppDlg::PLCToIndicator(const BYTE* pData, int nLength)
-{
-    if (m_bIndicatorConnected)
-    {
-        AddLog(_T("PLC → 인디케이터: "), pData, nLength);
-        m_indicatorSocket.SendData(pData, nLength);
-    }
-    else
-    {
-        AddLog(_T("인디케이터 연결 안됨: 데이터 전송 실패"));
+        CString strError;
+        strError.Format(_T("PLC 포트 %d 클라이언트 연결 안됨: 데이터 전송 실패"), pair.plcPort);
+        AddLog(strError);
     }
 }
 
+void C250410MFCAppDlg::PLCToIndicator(int index, const BYTE* pData, int nLength)
+{
+    ConnectionPair& pair = m_connections[index];
+
+    if (pair.indicatorConnected)
+    {
+        CString strLog;
+        strLog.Format(_T("PLC 포트 %d → 인디케이터 %s:%d: "),
+            pair.plcPort, pair.indicatorIP, pair.indicatorPort);
+        AddLog(strLog, pData, nLength);
+
+        BOOL bResult = pair.indicatorSocket.SendData(pData, nLength);
+
+        if (!bResult)
+        {
+            CString strError;
+            strError.Format(_T("PLC 포트 %d → 인디케이터 %s:%d: 데이터 전송 실패"),
+                pair.plcPort, pair.indicatorIP, pair.indicatorPort);
+            AddLog(strError);
+        }
+    }
+    else
+    {
+        CString strError;
+        strError.Format(_T("인디케이터 %s:%d 연결 안됨: 데이터 전송 실패"),
+            pair.indicatorIP, pair.indicatorPort);
+        AddLog(strError);
+    }
+}
 
 void C250410MFCAppDlg::AddLog(LPCTSTR pszPrefix, const BYTE* pData, int nLength)
 {
@@ -605,6 +823,7 @@ CString C250410MFCAppDlg::AnalyzeModbusPacket(const BYTE* pData, int nLength)
 
     return strResult;
 }
+
 int C250410MFCAppDlg::FindAvailablePort(int nStartPort, int nEndPort)
 {
     for (int port = nStartPort; port <= nEndPort; port++)
