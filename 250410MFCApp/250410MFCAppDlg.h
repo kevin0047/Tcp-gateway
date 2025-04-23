@@ -71,6 +71,15 @@ protected:
     DECLARE_MESSAGE_MAP()
 
 public:
+
+    // 타이머 ID 정의
+    enum {
+        TIMER_CONNECTION_CHECK = 1
+    };
+
+    // 타이머 함수
+    afx_msg void OnTimer(UINT_PTR nIDEvent);
+
     // 소켓 ID 정의
     enum {
         SOCKET_INDICATOR = 0,
@@ -95,7 +104,7 @@ public:
     afx_msg void OnBnClickedBtnClearLog();
 
     // 변경 후
-    static const int MAX_CONNECTIONS = 10;  // 최대 연결 개수
+    static const int MAX_CONNECTIONS = 30;  // 최대 연결 개수
     ConnectionPair m_connections[MAX_CONNECTIONS];
     int m_connectionCount;  // 실제 사용 중인 연결 개수
 

@@ -90,6 +90,8 @@ C250410MFCAppDlg::C250410MFCAppDlg(CWnd* pParent /*=nullptr*/)
 
 C250410MFCAppDlg::~C250410MFCAppDlg()
 {
+    // 타이머 해제
+        KillTimer(TIMER_CONNECTION_CHECK);
 }
 
 void C250410MFCAppDlg::DoDataExchange(CDataExchange* pDX)
@@ -110,6 +112,7 @@ BEGIN_MESSAGE_MAP(C250410MFCAppDlg, CDialogEx)
     ON_MESSAGE(WM_SOCKET_RECEIVE, &C250410MFCAppDlg::OnSocketReceive)
     ON_MESSAGE(WM_SOCKET_CLOSE, &C250410MFCAppDlg::OnSocketClose)
     ON_MESSAGE(WM_SOCKET_ACCEPT, &C250410MFCAppDlg::OnSocketAccept)
+    ON_WM_TIMER()  // 타이머 메시지 핸들러 추가
 END_MESSAGE_MAP()
 
 // C250410MFCAppDlg 메시지 처리기
@@ -158,6 +161,8 @@ BOOL C250410MFCAppDlg::OnInitDialog()
 
     // 상태 표시 업데이트
     UpdateStatusDisplay();
+    // 5초마다 연결 상태 확인 타이머 설정 (5000ms = 5초)
+    SetTimer(TIMER_CONNECTION_CHECK, 5000, NULL);
 
     return TRUE;
 }
@@ -189,7 +194,60 @@ HCURSOR C250410MFCAppDlg::OnQueryDragIcon()
 {
     return static_cast<HCURSOR>(m_hIcon);
 }
+void C250410MFCAppDlg::OnTimer(UINT_PTR nIDEvent)
+{
+    if (nIDEvent == TIMER_CONNECTION_CHECK)
+    {
+        // 각 연결의 상태 확인 및 재연결 필요 여부 판단
+        for (int i = 0; i < m_connectionCount; i++)
+        {
+            ConnectionPair& pair = m_connections[i];
 
+            // 인디케이터 연결 확인 및 재연결
+            if (!pair.indicatorConnected)
+            {
+                // 이전 소켓이 아직 닫히지 않았다면 닫기
+                if (pair.indicatorSocket.m_hSocket != INVALID_SOCKET)
+                {
+                    pair.indicatorSocket.Close();
+                }
+
+                // 일정 시간 간격으로만 로그 출력 (메시지 폭주 방지)
+                static int reconnectCount = 0;
+                if (reconnectCount % 12 == 0)  // 약 1분(12*5초)마다 로그 출력
+                {
+                    CString strLog;
+                    strLog.Format(_T("인디케이터 %s:%d 자동 재연결 시도..."),
+                        pair.indicatorIP, pair.indicatorPort);
+                    AddLog(strLog);
+                }
+                reconnectCount++;
+
+                // 인디케이터 재연결 시도
+                ConnectIndicator(i);
+            }
+
+            // PLC 서버 확인 및 재시작
+            if (!pair.plcConnected)
+            {
+                // 이전 서버 소켓이 아직 닫히지 않았다면 닫기
+                if (pair.serverSocket.m_hSocket != INVALID_SOCKET)
+                {
+                    pair.serverSocket.Close();
+                }
+
+                // PLC 서버 재시작
+                StartPLCServer(i);
+            }
+        }
+
+        // 연결 목록 및 상태 표시 업데이트
+        UpdateConnectionList();
+        UpdateStatusDisplay();
+    }
+
+    CDialogEx::OnTimer(nIDEvent);
+}
 BOOL C250410MFCAppDlg::LoadConnectionsFromFile(LPCTSTR lpszFilePath)
 {
     CStdioFile file;
@@ -306,7 +364,7 @@ void C250410MFCAppDlg::OnBnClickedBtnConnectAll()
                 StartPLCServer(i);
             }
         }
-        m_btnConnectAll.SetWindowText(_T("모든 연결 중지"));
+        m_btnConnectAll.SetWindowText(_T("연결 재시작"));
     }
     else
     {
