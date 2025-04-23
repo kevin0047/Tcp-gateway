@@ -1,4 +1,4 @@
-Indicator_IP,Indicator_Port,Unit_ID
-127.0.0.1,5020,1
-127.0.0.1,5021,2
-127.0.0.1,5022,3
+Indicator_IP,Indicator_Port
+127.0.0.1,5020
+127.0.0.1,5021
+127.0.0.1,5022
